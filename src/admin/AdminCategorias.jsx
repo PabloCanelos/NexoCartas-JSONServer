@@ -1,91 +1,234 @@
+
 import { useState } from 'react';
+
 import TablaDatos from '../components/TablaDatos.jsx';
-import { useDatos } from '../hooks/useDatos.js';
-import {
-  crearCategoria,
-  eliminarCategoria,
-  obtenerCategoriasConConteo,
-  renombrarCategoria,
-} from '../services/categoriasService.js';
+import { useCategorias } from '../context/CategoriasContext.jsx';
+import { useProductos } from '../context/ProductosContext.jsx';
 import { validarCategoria } from '../services/validaciones.js';
 
-// /admin/categorias : crear, renombrar y eliminar categorías.
 export default function AdminCategorias() {
-  const [categorias, recargar] = useDatos(obtenerCategoriasConConteo);
+  const {
+    categorias,
+    cargando,
+    guardando,
+    error,
+    recargar,
+    crear,
+    renombrar,
+    eliminar,
+  } = useCategorias();
+
+  const {
+    cartas,
+    cargando: cargandoProductos,
+    error: errorProductos,
+    recargar: recargarProductos,
+  } = useProductos();
+
   const [nueva, setNueva] = useState('');
   const [errorNueva, setErrorNueva] = useState('');
-  const [editando, setEditando] = useState(null); // { original, valor }
+  const [editando, setEditando] = useState(null);
   const [errorEdicion, setErrorEdicion] = useState('');
   const [mensaje, setMensaje] = useState(null);
 
-  function crear(e) {
-    e.preventDefault();
-    const nombres = categorias.map((c) => c.nombre);
-    const error = validarCategoria(nueva, nombres);
-    setErrorNueva(error);
-    if (error) return;
-    crearCategoria(nueva);
-    setNueva('');
-    setMensaje({ ok: true, texto: 'Categoría creada.' });
-    recargar();
-  }
+  const ocupado = cargando || cargandoProductos || guardando;
+  const errorCarga = error || errorProductos;
 
-  function guardarEdicion(e) {
-    e.preventDefault();
-    const otras = categorias.map((c) => c.nombre).filter((n) => n !== editando.original);
-    const error = validarCategoria(editando.valor, otras);
-    setErrorEdicion(error);
-    if (error) return;
-    renombrarCategoria(editando.original, editando.valor);
-    setEditando(null);
-    setMensaje({ ok: true, texto: 'Categoría actualizada.' });
-    recargar();
-  }
+  const categoriasConConteo = categorias
+    .map((categoria) => ({
+      ...categoria,
+      cantidad: cartas.filter(
+        (carta) => carta.categoria === categoria.nombre,
+      ).length,
+    }))
+    .sort((a, b) => a.nombre.localeCompare(b.nombre));
 
-  function borrar(nombre) {
+  async function crearNueva(e) {
+    e.preventDefault();
+
+    const nombres = categorias.map((categoria) => categoria.nombre);
+    const errorValidacion = validarCategoria(nueva, nombres);
+
+    setErrorNueva(errorValidacion);
+    setMensaje(null);
+
+    if (errorValidacion || ocupado) return;
+
     try {
-      eliminarCategoria(nombre);
-      setMensaje({ ok: true, texto: 'Categoría eliminada.' });
-    } catch (error) {
-      setMensaje({ ok: false, texto: error.message });
+      await crear(nueva);
+      setNueva('');
+      setErrorNueva('');
+      setMensaje({
+        ok: true,
+        texto: 'Categoría creada correctamente.',
+      });
+    } catch (err) {
+      setMensaje({
+        ok: false,
+        texto: err.message || 'No se pudo crear la categoría.',
+      });
     }
-    recargar();
+  }
+
+  async function guardarEdicion(e) {
+    e.preventDefault();
+
+    if (!editando || ocupado) return;
+
+    const otras = categorias
+      .filter((categoria) => categoria.id !== editando.id)
+      .map((categoria) => categoria.nombre);
+
+    const errorValidacion = validarCategoria(
+      editando.valor,
+      otras,
+    );
+
+    setErrorEdicion(errorValidacion);
+    setMensaje(null);
+
+    if (errorValidacion) return;
+
+    try {
+      await renombrar(editando.id, editando.valor);
+      setEditando(null);
+      setErrorEdicion('');
+      setMensaje({
+        ok: true,
+        texto: 'Categoría actualizada correctamente.',
+      });
+    } catch (err) {
+      setMensaje({
+        ok: false,
+        texto:
+          `${err.message || 'No se pudo actualizar la categoría.'} ` +
+          'Comprueba los datos antes de volver a intentarlo.',
+      });
+    }
+  }
+
+  async function borrar(categoria) {
+    if (ocupado || categoria.cantidad > 0) return;
+
+    setMensaje(null);
+
+    try {
+      await eliminar(categoria.id);
+      setMensaje({
+        ok: true,
+        texto: 'Categoría eliminada correctamente.',
+      });
+    } catch (err) {
+      setMensaje({
+        ok: false,
+        texto: err.message || 'No se pudo eliminar la categoría.',
+      });
+    }
   }
 
   const columnas = [
     {
       clave: 'nombre',
       titulo: 'Categoría',
-      render: (c) =>
-        editando?.original === c.nombre ? (
-          <form onSubmit={guardarEdicion} noValidate className="d-flex flex-wrap gap-2 align-items-start">
+      render: (categoria) =>
+        editando?.id === categoria.id ? (
+          <form
+            onSubmit={guardarEdicion}
+            noValidate
+            className="d-flex flex-wrap gap-2 align-items-start"
+          >
             <div>
-              <label htmlFor="editar-categoria" className="visually-hidden">Nuevo nombre</label>
-              <input id="editar-categoria" className={'form-control form-control-sm' + (errorEdicion ? ' is-invalid' : '')}
-                value={editando.valor} onChange={(e) => setEditando({ ...editando, valor: e.target.value })} />
-              {errorEdicion && <div className="invalid-feedback">{errorEdicion}</div>}
+              <label
+                htmlFor="editar-categoria"
+                className="visually-hidden"
+              >
+                Nuevo nombre
+              </label>
+
+              <input
+                id="editar-categoria"
+                className={
+                  'form-control form-control-sm' +
+                  (errorEdicion ? ' is-invalid' : '')
+                }
+                value={editando.valor}
+                disabled={ocupado}
+                onChange={(e) =>
+                  setEditando({
+                    ...editando,
+                    valor: e.target.value,
+                  })
+                }
+              />
+
+              {errorEdicion && (
+                <div className="invalid-feedback">
+                  {errorEdicion}
+                </div>
+              )}
             </div>
-            <button type="submit" className="btn btn-primary btn-sm">Guardar</button>
-            <button type="button" className="btn btn-outline-secondary btn-sm"
-              onClick={() => { setEditando(null); setErrorEdicion(''); }}>Cancelar</button>
+
+            <button
+              type="submit"
+              className="btn btn-primary btn-sm"
+              disabled={ocupado}
+            >
+              Guardar
+            </button>
+
+            <button
+              type="button"
+              className="btn btn-outline-secondary btn-sm"
+              disabled={ocupado}
+              onClick={() => {
+                setEditando(null);
+                setErrorEdicion('');
+              }}
+            >
+              Cancelar
+            </button>
           </form>
         ) : (
-          c.nombre
+          categoria.nombre
         ),
     },
-    { clave: 'cantidad', titulo: 'Cartas', clase: 'text-end' },
+    {
+      clave: 'cantidad',
+      titulo: 'Cartas',
+      clase: 'text-end',
+    },
     {
       clave: 'acciones',
       titulo: 'Acciones',
-      render: (c) => (
+      render: (categoria) => (
         <span className="d-inline-flex gap-1">
-          <button type="button" className="btn btn-outline-primary btn-sm"
-            onClick={() => { setEditando({ original: c.nombre, valor: c.nombre }); setErrorEdicion(''); }}>
+          <button
+            type="button"
+            className="btn btn-outline-primary btn-sm"
+            disabled={ocupado}
+            onClick={() => {
+              setEditando({
+                id: categoria.id,
+                valor: categoria.nombre,
+              });
+              setErrorEdicion('');
+              setMensaje(null);
+            }}
+          >
             Renombrar
           </button>
-          <button type="button" className="btn btn-outline-danger btn-sm" disabled={c.cantidad > 0}
-            title={c.cantidad > 0 ? 'Tiene cartas asociadas' : 'Eliminar categoría'}
-            onClick={() => borrar(c.nombre)}>
+
+          <button
+            type="button"
+            className="btn btn-outline-danger btn-sm"
+            disabled={ocupado || categoria.cantidad > 0}
+            title={
+              categoria.cantidad > 0
+                ? 'Tiene cartas asociadas'
+                : 'Eliminar categoría'
+            }
+            onClick={() => borrar(categoria)}
+          >
             Eliminar
           </button>
         </span>
@@ -96,25 +239,97 @@ export default function AdminCategorias() {
   return (
     <>
       <h1 className="h3 mb-3">Categorías</h1>
+
       {mensaje && (
-        <div className={'alert py-2 alert-' + (mensaje.ok ? 'success' : 'danger')} role="status">
+        <div
+          className={
+            'alert py-2 alert-' +
+            (mensaje.ok ? 'success' : 'danger')
+          }
+          role="status"
+        >
           {mensaje.texto}
         </div>
       )}
-      <form onSubmit={crear} noValidate className="row g-2 mb-3">
-        <div className="col-12 col-md-6">
-          <label htmlFor="nueva-categoria" className="visually-hidden">Nombre de la categoría</label>
-          <input id="nueva-categoria" className={'form-control' + (errorNueva ? ' is-invalid' : '')}
-            placeholder="Nueva categoría" value={nueva} onChange={(e) => setNueva(e.target.value)} />
-          {errorNueva && <div className="invalid-feedback">{errorNueva}</div>}
+
+      {errorCarga && (
+        <div className="alert alert-danger" role="alert">
+          <p>{errorCarga}</p>
+          <button
+            type="button"
+            className="btn btn-outline-danger"
+            disabled={ocupado}
+            onClick={() => {
+              Promise.allSettled([
+                recargar(),
+                recargarProductos(),
+              ]);
+            }}
+          >
+            Reintentar
+          </button>
         </div>
+      )}
+
+      <form
+        onSubmit={crearNueva}
+        noValidate
+        className="row g-2 mb-3"
+      >
+        <div className="col-12 col-md-6">
+          <label
+            htmlFor="nueva-categoria"
+            className="visually-hidden"
+          >
+            Nombre de la categoría
+          </label>
+
+          <input
+            id="nueva-categoria"
+            className={
+              'form-control' +
+              (errorNueva ? ' is-invalid' : '')
+            }
+            placeholder="Nueva categoría"
+            value={nueva}
+            disabled={ocupado || Boolean(errorCarga)}
+            onChange={(e) => setNueva(e.target.value)}
+          />
+
+          {errorNueva && (
+            <div className="invalid-feedback">
+              {errorNueva}
+            </div>
+          )}
+        </div>
+
         <div className="col-auto">
-          <button type="submit" className="btn btn-primary">Agregar</button>
+          <button
+            type="submit"
+            className="btn btn-primary"
+            disabled={ocupado || Boolean(errorCarga)}
+          >
+            {guardando ? 'Guardando...' : 'Agregar'}
+          </button>
         </div>
       </form>
-      <TablaDatos columnas={columnas} filas={categorias} claveFila="nombre" mensajeVacio="No hay categorías." />
+
+      {ocupado && !guardando && (
+        <p role="status">Cargando categorías...</p>
+      )}
+
+      {!cargando && !cargandoProductos && !errorCarga && (
+        <TablaDatos
+          columnas={columnas}
+          filas={categoriasConConteo}
+          claveFila="id"
+          mensajeVacio="No hay categorías."
+        />
+      )}
+
       <p className="small text-body-secondary">
-        Solo se pueden eliminar las categorías sin cartas. Al renombrar, las cartas se actualizan solas.
+        Solo se pueden eliminar las categorías sin cartas.
+        Al renombrar, también se actualizan sus productos asociados.
       </p>
     </>
   );

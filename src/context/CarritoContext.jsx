@@ -1,10 +1,9 @@
+
 import { createContext, useContext, useState } from 'react';
 import { almacenActual } from '../services/almacen.js';
-import { buscarCartaPorId } from '../services/cartasService.js';
 import { precioFinal } from '../services/formato.js';
+import { useProductos } from './ProductosContext.jsx';
 
-// El carrito guarda solo líneas { id, cantidad }. Los datos de cada carta
-// (nombre, precio, stock) se leen siempre de la fuente de datos vigente.
 const CLAVE = 'nexoCarrito';
 const Contexto = createContext(null);
 
@@ -19,57 +18,119 @@ function leer() {
 
 export function CarritoProvider({ children }) {
   const [lineasGuardadas, setLineas] = useState(leer);
+  const { cartas, cargando } = useProductos();
 
   function actualizar(nuevas) {
     almacenActual().setItem(CLAVE, JSON.stringify(nuevas));
     setLineas(nuevas);
   }
 
-  // Agrega unidades respetando el stock (RN-01). Devuelve { ok, mensaje }.
+  function buscarCarta(id) {
+    return cartas.find((carta) => carta.id === Number(id)) || null;
+  }
+
   function agregar(id, cantidad = 1) {
-    const carta = buscarCartaPorId(id);
-    if (!carta || !carta.activo || carta.stock <= 0) {
-      return { ok: false, mensaje: 'Esta carta no está disponible.' };
+    if (cargando) {
+      return {
+        ok: false,
+        mensaje: 'Los productos todavía se están cargando.',
+      };
     }
-    const linea = lineasGuardadas.find((l) => l.id === carta.id);
+
+    const carta = buscarCarta(id);
+
+    if (!carta || !carta.activo || carta.stock <= 0) {
+      return {
+        ok: false,
+        mensaje: 'Esta carta no está disponible.',
+      };
+    }
+
+    const unidades = Number(cantidad);
+
+    if (!Number.isInteger(unidades) || unidades <= 0) {
+      return {
+        ok: false,
+        mensaje: 'La cantidad debe ser un número entero positivo.',
+      };
+    }
+
+    const linea = lineasGuardadas.find(
+      (item) => item.id === carta.id,
+    );
+
     const actual = linea ? linea.cantidad : 0;
-    const nueva = Math.min(actual + cantidad, carta.stock);
+    const nueva = Math.min(actual + unidades, carta.stock);
+
     if (nueva === actual) {
       return {
         ok: false,
         mensaje: `Ya tienes las ${carta.stock} unidades disponibles de "${carta.nombre}".`,
       };
     }
+
     actualizar(
       linea
-        ? lineasGuardadas.map((l) => (l.id === carta.id ? { ...l, cantidad: nueva } : l))
+        ? lineasGuardadas.map((item) =>
+            item.id === carta.id
+              ? { ...item, cantidad: nueva }
+              : item,
+          )
         : [...lineasGuardadas, { id: carta.id, cantidad: nueva }],
     );
-    return { ok: true, mensaje: `"${carta.nombre}" agregada al carrito.` };
+
+    return {
+      ok: true,
+      mensaje: `"${carta.nombre}" agregada al carrito.`,
+    };
   }
 
   function cambiarCantidad(id, cantidad) {
-    const carta = buscarCartaPorId(id);
-    const entero = Math.floor(Number(cantidad));
-    if (!carta || !Number.isFinite(entero)) return;
-    const limitada = Math.max(1, Math.min(entero, Math.max(carta.stock, 1)));
-    actualizar(lineasGuardadas.map((l) => (l.id === Number(id) ? { ...l, cantidad: limitada } : l)));
+    const carta = buscarCarta(id);
+    const entero = Number(cantidad);
+
+    if (
+      !carta ||
+      !Number.isInteger(entero) ||
+      entero <= 0
+    ) {
+      return;
+    }
+
+    const limitada = Math.min(
+      entero,
+      Math.max(carta.stock, 1),
+    );
+
+    actualizar(
+      lineasGuardadas.map((item) =>
+        item.id === Number(id)
+          ? { ...item, cantidad: limitada }
+          : item,
+      ),
+    );
   }
 
   function quitar(id) {
-    actualizar(lineasGuardadas.filter((l) => l.id !== Number(id)));
+    actualizar(
+      lineasGuardadas.filter(
+        (item) => item.id !== Number(id),
+      ),
+    );
   }
 
   function vaciar() {
     actualizar([]);
   }
 
-  // Líneas con los datos completos de cada carta (ignora las que ya no existen).
   const lineas = lineasGuardadas
     .map((linea) => {
-      const carta = buscarCartaPorId(linea.id);
+      const carta = buscarCarta(linea.id);
+
       if (!carta || !carta.activo) return null;
+
       const precioUnitario = precioFinal(carta);
+
       return {
         carta,
         cantidad: linea.cantidad,
@@ -82,18 +143,32 @@ export function CarritoProvider({ children }) {
 
   const valor = {
     lineas,
-    cantidadTotal: lineas.reduce((suma, l) => suma + l.cantidad, 0),
-    subtotal: lineas.reduce((suma, l) => suma + l.subtotal, 0),
-    hayProblemas: lineas.some((l) => !l.disponible),
+    cantidadTotal: lineas.reduce(
+      (suma, linea) => suma + linea.cantidad,
+      0,
+    ),
+    subtotal: lineas.reduce(
+      (suma, linea) => suma + linea.subtotal,
+      0,
+    ),
+    hayProblemas: lineas.some(
+      (linea) => !linea.disponible,
+    ),
     agregar,
     cambiarCantidad,
     quitar,
     vaciar,
   };
 
-  return <Contexto.Provider value={valor}>{children}</Contexto.Provider>;
+  return (
+    <Contexto.Provider value={valor}>
+      {children}
+    </Contexto.Provider>
+  );
 }
 
+// Conservamos el hook en este módulo para mantener las importaciones.
+// eslint-disable-next-line react-refresh/only-export-components
 export function useCarrito() {
   return useContext(Contexto);
 }
